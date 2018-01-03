@@ -45,14 +45,17 @@ $VERSION     = '0.01';
 #                 Both    => [qw(&func1 &func2)]);
 
 
-
-1;
-
 # Modified to support "verilog mode" and 
 # parsing of tick-define (`SIZE) for constants in bit-width
-# Note: May have bugs. Not extensively tested. Please send bug reports
-# Doesn't support "inout" port type at all for now.
+# Note: May have bugs. Doesn't support "inout" port type at all
 my $VERILOG_MODE = 1;
+# useful to not parse parameters when they are of a complex arithmetic form
+# eg: parameter a = b/8;
+# or: parameter c = a + b;
+my $DONTPARSEPARAMS = 1;
+my $localparams = "";
+
+1;
 
 sub getFile {
 	#------------------------------------------------------------------------------ 
@@ -365,11 +368,15 @@ sub getModIO {
 	    foreach my $j (@paramA) {
 	        if ($j =~ m/parameter/) {
 	            $j =~ s/.*parameter\s+//;
-	            ($param, $crap2, $paramval, $crap3) = ($j =~ /(\S+)(\s+=\s+)(\S+)([,\x29].*)/);
+	            ($param, $crap2, $paramval, $crap3) = ($j =~ /(\S+)(\s+=\s+)(.*)\s*([,\x29])/);
 	            $paramHoH{ $param }{ 'parameter' } = $param;
 	            $paramHoH{ $param }{ 'value' } = $paramval;
 	            print("Parameter: $paramHoH{ $param }{ 'parameter' }\n") if $debug;
 	            print("Parameter Value: $paramHoH{ $param }{ 'value' }\n") if $debug;
+	            
+	            if ($DONTPARSEPARAMS == 1){
+	            	$localparams .= "localparam " . $param . " = " . $paramval . ";\n";
+	            }
 	        }
 	    }
 	    for ($line = 0; $line < ($allportsA_Len); $line++) {
@@ -400,18 +407,24 @@ sub getModIO {
 	            for my $key ( sort(keys %paramHoH) ) {
 	                #print("$key => $paramHoH{$key}{'value'}\n") if $debug;
 	                if ($msb =~ m/$paramHoH{$key}{'parameter'}/) {
-	                    print("Key: $paramHoH{$key}{'parameter'}\n") if $debug;
-	                    print("Value: $paramHoH{$key}{'value'}\n") if $debug;
-	                    my $param_minus_1 = ($paramHoH{$key}{'value'}-1);
-			    if ($msb =~ /\x28/) {
-		                    $msb =~ s/\x28$paramHoH{$key}{'parameter'}-1\x29/$param_minus_1/;
-			    } else {
-		                    $msb =~ s/$paramHoH{$key}{'parameter'}-1/$param_minus_1/;
-			    }
+	                	if ($DONTPARSEPARAMS == 0){
+		                    print("Key: $paramHoH{$key}{'parameter'}\n") if $debug;
+		                    print("Value: $paramHoH{$key}{'value'}\n") if $debug;
+		                    my $param_minus_1 = ($paramHoH{$key}{'value'}-1);
+				    		if ($msb =~ /\x28/) {
+			                    $msb =~ s/\x28$paramHoH{$key}{'parameter'}-1\x29/$param_minus_1/;
+				    		} else {
+			                    $msb =~ s/$paramHoH{$key}{'parameter'}-1/$param_minus_1/;
+				    		}
+	                	}
+	                	else{
+	                			$msb = $paramHoH{$key}{'parameter'} . "-1";
+	                	}
 	                }
+	                
 	            }
 	            # Added by SP
-	            if ($msb =~ m/^\`/){
+	            if (($DONTPARSEPARAMS == 1) || ($msb =~ m/^\`/)){
 	            	$width = $msb;
 	            	$allportsHoH{$allportsonlyA[$line]}{'widthFormat'} = 0;
 	            	
@@ -483,7 +496,7 @@ sub getModIO {
 	            $allportsA[$line] =~ s/\x5d.*//;
 	            ($msb, $colon, $lsb) = ($allportsA[$line] =~ /(\S+)(:)(\S+)/);
 	            # Added by SP
-	            if ($msb =~ m/^\`/){
+	            if (($DONTPARSEPARAMS == 1) || ($msb =~ m/^\`/)){
 	            	$width = $msb;
 	            	$allportsHoH{$allportsonlyA[$line]}{'widthFormat'} = 0;
 	            	
@@ -630,9 +643,19 @@ sub genModInst {
 				if ($paramHoH_Size <= 1) {
 					# If we're on the last parameter, 
 					# don't add a ", " (i.e., a comma followed by a space).
-					$modinst_line1 .= ".$paramHoH{$key}{'parameter'}($paramHoH{$key}{'value'})";
+					if ($DONTPARSEPARAMS == 0){
+						$modinst_line1 .= ".$paramHoH{$key}{'parameter'}($paramHoH{$key}{'value'})";
+					}
+					else{
+						$modinst_line1 .= ".$paramHoH{$key}{'parameter'}($paramHoH{$key}{'parameter'})";
+					}
 				} else {
-					$modinst_line1 .= ".$paramHoH{$key}{'parameter'}($paramHoH{$key}{'value'}), ";
+					if ($DONTPARSEPARAMS == 0){
+						$modinst_line1 .= ".$paramHoH{$key}{'parameter'}($paramHoH{$key}{'value'}), ";
+					}
+					else{
+						$modinst_line1 .= ".$paramHoH{$key}{'parameter'}($paramHoH{$key}{'parameter'}), ";
+					}
 				}
 				$paramHoH_Size -= 1;
 			}
@@ -646,7 +669,14 @@ sub genModInst {
 			#	* Create string with correct numer of indent spaces.
 			#
 			#----------------------------------------------------------------------
-			my ($tmpinst_len) = length($modinst_line1);
+			my $tmpinst_len;
+			if ($DONTPARSEPARAMS == 0){
+				$tmpinst_len = length($modinst_line1);
+			}
+			else{
+				$tmpinst_len = 20;
+			}
+			
 			print("Number of Indent Spaces: $tmpinst_len\n") if $debug;
 			my ($i) = 0;
 			my (@indent);
@@ -1140,7 +1170,7 @@ sub genTBTop {
 	# their respective arrays:
 	for my $key ( sort(keys %allportsHoH) ) {
 		if ($allportsHoH{$key}{'port'} =~ m/(clk|clock|CLK)/) {
-			$netType = $VERILOG_MODE ? "wire" : "logic";
+			$netType = $VERILOG_MODE ? "reg" : "logic";
 			
 			$templine = "$netType            $allportsHoH{$key}{'port'};\n";
 			push(@inlines, $templine);
@@ -1152,7 +1182,7 @@ sub genTBTop {
 		$flag = $allportsHoH{$key}{'widthFormat'};		# added by SP
 				
 		if ($allportsHoH{$key}{'direction'} eq "input") {
-			$netType = $VERILOG_MODE ? "wire" : "logic";
+			$netType = $VERILOG_MODE ? "reg" : "logic";
 			
 			if ($flag == 1){
 				if ($allportsHoH{$key}{'width'} > 1) {
@@ -1169,7 +1199,7 @@ sub genTBTop {
 			}
 			else{
 				$msb = $allportsHoH{$key}{'width'};
-
+				
 				$templine = "$netType  [$msb:$lsb]		$allportsHoH{$key}{'port'};\n";
 				
 				push(@inlines, $templine);
@@ -1198,7 +1228,7 @@ sub genTBTop {
 		$flag = $allportsHoH{$key}{'widthFormat'};		# added by SP
 		
 		if ($allportsHoH{$key}{'direction'} eq "output") {
-			$netType = $VERILOG_MODE ? "reg" : "logic";
+			$netType = $VERILOG_MODE ? "wire" : "logic";
 			
 			if ($flag == 1){
 				if ($allportsHoH{$key}{'width'} > 1) {
@@ -1268,6 +1298,8 @@ module top;  // top-level netlist to connect testbench to dut
   
 timeunit 1ns; timeprecision 1ps;
 
+// Local parameters
+$localparams
 // *** Input to UUT ***
 $inDecl
 // *** Inouts to UUT ***
@@ -1437,7 +1469,7 @@ sub genTBTestBody {
 	# their respective arrays:
 	for my $key ( sort(keys %allportsHoH) ) {
 		if ($allportsHoH{$key}{'port'} =~ m/(clk|clock|CLK)/) {
-			$netType = $VERILOG_MODE ? "" : "logic";
+			$netType = $VERILOG_MODE ? "reg" : "logic";
 			
 			$templine = "$indent_spaces input   $netType	$allportsHoH{$key}{'port'},\n";
 			push(@inlines, $templine);
@@ -1449,7 +1481,7 @@ sub genTBTestBody {
 		$flag = $allportsHoH{$key}{'widthFormat'};		# added by SP
 		
 		if ($allportsHoH{$key}{'direction'} eq "input") {
-			$netType = $VERILOG_MODE ? "reg" : "logic";
+			$netType = $VERILOG_MODE ? "" : "logic";
 			
 			if ($flag == 1){
 				if ($allportsHoH{$key}{'width'} > 1) {
@@ -1494,7 +1526,7 @@ sub genTBTestBody {
 		$flag = $allportsHoH{$key}{'widthFormat'};		# added by SP
 		
 		if ($allportsHoH{$key}{'direction'} eq "output") {
-			$netType = $VERILOG_MODE ? "" : "logic";
+			$netType = $VERILOG_MODE ? "reg" : "logic";
 			
 			if ($flag == 1){
 				if ($allportsHoH{$key}{'width'} > 1) {
