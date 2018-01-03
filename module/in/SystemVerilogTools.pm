@@ -48,6 +48,12 @@ $VERSION     = '0.01';
 
 1;
 
+# Modified to support "verilog mode" and 
+# parsing of tick-define (`SIZE) for constants in bit-width
+# Note: May have bugs. Not extensively tested. Please send bug reports
+# Doesn't support "inout" port type at all for now.
+my $VERILOG_MODE = 1;
+
 sub getFile {
 	#------------------------------------------------------------------------------ 
 	# Get SystemVerilog File:
@@ -404,7 +410,18 @@ sub getModIO {
 			    }
 	                }
 	            }
-	            $width = ($msb+1);
+	            # Added by SP
+	            if ($msb =~ m/^\`/){
+	            	$width = $msb;
+	            	$allportsHoH{$allportsonlyA[$line]}{'widthFormat'} = 0;
+	            	
+	            	
+	            }
+	            else{
+	            	$width = ($msb+1);
+	            	$allportsHoH{$allportsonlyA[$line]}{'widthFormat'} = 1;	            	
+	            }
+	            
 		    $allportsHoH{$allportsonlyA[$line]}{'port'} = $allportsonlyA[$line];
 		    $allportsHoH{$allportsonlyA[$line]}{'width'} = $width;
 		    $allportsHoH{$allportsonlyA[$line]}{'direction'} = $direction;
@@ -431,6 +448,7 @@ sub getModIO {
 	            $tempLine =~ s/,//;
 	            $tempLine =~ s/\s+$//;
 	            $width = 1;
+	            $allportsHoH{$allportsonlyA[$line]}{'widthFormat'} = 1;
 		    $allportsHoH{$allportsonlyA[$line]}{'port'} = $allportsonlyA[$line];
 		    $allportsHoH{$allportsonlyA[$line]}{'width'} = $width;
 		    $allportsHoH{$allportsonlyA[$line]}{'direction'} = $direction;
@@ -464,7 +482,18 @@ sub getModIO {
 	            $allportsA[$line] =~ s/.*\x5b//;
 	            $allportsA[$line] =~ s/\x5d.*//;
 	            ($msb, $colon, $lsb) = ($allportsA[$line] =~ /(\S+)(:)(\S+)/);
-	            $width = ($msb+1);
+	            # Added by SP
+	            if ($msb =~ m/^\`/){
+	            	$width = $msb;
+	            	$allportsHoH{$allportsonlyA[$line]}{'widthFormat'} = 0;
+	            	
+	            	
+	            }
+	            else{
+	            	$width = ($msb+1);
+	            	$allportsHoH{$allportsonlyA[$line]}{'widthFormat'} = 1;	            	
+	            }
+	            
 		    $allportsHoH{$allportsonlyA[$line]}{'port'} = $allportsonlyA[$line];
 		    $allportsHoH{$allportsonlyA[$line]}{'width'} = $width;
 		    $allportsHoH{$allportsonlyA[$line]}{'direction'} = $direction;
@@ -491,6 +520,7 @@ sub getModIO {
 	            $tempLine =~ s/,//;
 	            $tempLine =~ s/\s+$//;
 	            $width = 1;
+	            $allportsHoH{$allportsonlyA[$line]}{'widthFormat'} = 1;
 		    $allportsHoH{$allportsonlyA[$line]}{'port'} = $allportsonlyA[$line];
 		    $allportsHoH{$allportsonlyA[$line]}{'width'} = $width;
 		    $allportsHoH{$allportsonlyA[$line]}{'direction'} = $direction;
@@ -1102,26 +1132,46 @@ sub genTBTop {
 	my ($msb) = 0;
 	my ($lsb) = 0;
 	my ($templine) = "";
+	
+	my $flag;				# added by SP
+	my $netType;			# added by SP
+	
 	# Push lines from the module declaration that match input, inout, or output into 
 	# their respective arrays:
 	for my $key ( sort(keys %allportsHoH) ) {
 		if ($allportsHoH{$key}{'port'} =~ m/(clk|clock|CLK)/) {
-			$templine = "logic            $allportsHoH{$key}{'port'};\n";
+			$netType = $VERILOG_MODE ? "wire" : "logic";
+			
+			$templine = "$netType            $allportsHoH{$key}{'port'};\n";
 			push(@inlines, $templine);
 			print("Clock: $templine\n") if $debug;
 		}
 	}
 
 	for my $key ( sort(keys %allportsHoH) ) {
+		$flag = $allportsHoH{$key}{'widthFormat'};		# added by SP
+				
 		if ($allportsHoH{$key}{'direction'} eq "input") {
-			if ($allportsHoH{$key}{'width'} > 1) {
+			$netType = $VERILOG_MODE ? "wire" : "logic";
+			
+			if ($flag == 1){
+				if ($allportsHoH{$key}{'width'} > 1) {
+					$msb = $allportsHoH{$key}{'width'};
+					$msb -= 1;
+					$templine = "$netType  [$msb:$lsb]    $allportsHoH{$key}{'port'};\n";
+					push(@inlines, $templine);
+					print("Input: $templine\n") if $debug;
+				} elsif(($allportsHoH{$key}{'width'} == 1) and !($allportsHoH{$key}{'port'} =~ m/(clk|clock|CLK)/)) {
+					$templine = "$netType		$allportsHoH{$key}{'port'};\n";
+					push(@inlines, $templine);
+					print("Input: $templine\n") if $debug;
+				}
+			}
+			else{
 				$msb = $allportsHoH{$key}{'width'};
-				$msb -= 1;
-				$templine = "logic  [$msb:$lsb]    $allportsHoH{$key}{'port'};\n";
-				push(@inlines, $templine);
-				print("Input: $templine\n") if $debug;
-			} elsif(($allportsHoH{$key}{'width'} == 1) and !($allportsHoH{$key}{'port'} =~ m/(clk|clock|CLK)/)) {
-				$templine = "logic            $allportsHoH{$key}{'port'};\n";
+
+				$templine = "$netType  [$msb:$lsb]		$allportsHoH{$key}{'port'};\n";
+				
 				push(@inlines, $templine);
 				print("Input: $templine\n") if $debug;
 			}
@@ -1145,15 +1195,28 @@ sub genTBTop {
 	}
 
 	for my $key ( sort(keys %allportsHoH) ) {
+		$flag = $allportsHoH{$key}{'widthFormat'};		# added by SP
+		
 		if ($allportsHoH{$key}{'direction'} eq "output") {
-			if ($allportsHoH{$key}{'width'} > 1) {
+			$netType = $VERILOG_MODE ? "reg" : "logic";
+			
+			if ($flag == 1){
+				if ($allportsHoH{$key}{'width'} > 1) {
+					$msb = $allportsHoH{$key}{'width'};
+					$msb -= 1;
+					$templine = "$netType  [$msb:$lsb]    $allportsHoH{$key}{'port'};\n";
+					push(@outlines, $templine);
+					print("Output: $templine\n") if $debug;
+				} else {
+					$templine = "$netType		$allportsHoH{$key}{'port'};\n";
+					push(@outlines, $templine);
+					print("Output: $templine\n") if $debug;
+				}
+			}
+			else{
 				$msb = $allportsHoH{$key}{'width'};
-				$msb -= 1;
-				$templine = "logic  [$msb:$lsb]    $allportsHoH{$key}{'port'};\n";
-				push(@outlines, $templine);
-				print("Output: $templine\n") if $debug;
-			} else {
-				$templine = "logic            $allportsHoH{$key}{'port'};\n";
+				$templine = "$netType  [$msb:$lsb]		$allportsHoH{$key}{'port'};\n";
+			
 				push(@outlines, $templine);
 				print("Output: $templine\n") if $debug;
 			}
@@ -1180,7 +1243,7 @@ sub genTBTop {
 
 *******************************************************************************
 
- COMPANY Confidential Copyright � $yearR
+ none Confidential Copyright ï¿½ $yearR
 
 *******************************************************************************
 
@@ -1282,7 +1345,7 @@ sub genTBTestHeader {
 
 *******************************************************************************
 
- COMPANY Confidential Copyright � $yearR
+ none Confidential Copyright ï¿½ $yearR
 
 *******************************************************************************
 
@@ -1366,26 +1429,45 @@ sub genTBTestBody {
 	my ($msb) = 0;
 	my ($lsb) = 0;
 	my ($templine) = "";
+	
+	my $flag;				# Added by SP
+	my $netType;			# added by SP
+	
 	# Push lines from the module declaration that match input, inout, or output into 
 	# their respective arrays:
 	for my $key ( sort(keys %allportsHoH) ) {
 		if ($allportsHoH{$key}{'port'} =~ m/(clk|clock|CLK)/) {
-			$templine = "$indent_spaces input   logic           $allportsHoH{$key}{'port'},\n";
+			$netType = $VERILOG_MODE ? "" : "logic";
+			
+			$templine = "$indent_spaces input   $netType	$allportsHoH{$key}{'port'},\n";
 			push(@inlines, $templine);
 			print("Clock: $templine\n") if $debug;
 		}
 	}
 
 	for my $key ( sort(keys %allportsHoH) ) {
+		$flag = $allportsHoH{$key}{'widthFormat'};		# added by SP
+		
 		if ($allportsHoH{$key}{'direction'} eq "input") {
-			if ($allportsHoH{$key}{'width'} > 1) {
+			$netType = $VERILOG_MODE ? "reg" : "logic";
+			
+			if ($flag == 1){
+				if ($allportsHoH{$key}{'width'} > 1) {
+					$msb = $allportsHoH{$key}{'width'};
+					$msb -= 1;
+					$templine = "$indent_spaces output  $netType  [$msb:$lsb]    $allportsHoH{$key}{'port'},\n";
+					push(@outlines, $templine);
+					print("Input: $templine\n") if $debug;
+				} elsif(($allportsHoH{$key}{'width'} == 1) and !($allportsHoH{$key}{'port'} =~ m/(clk|clock|CLK)/)) {
+					$templine = "$indent_spaces output  $netType            $allportsHoH{$key}{'port'},\n";
+					push(@outlines, $templine);
+					print("Input: $templine\n") if $debug;
+				}
+			}
+			else{
 				$msb = $allportsHoH{$key}{'width'};
-				$msb -= 1;
-				$templine = "$indent_spaces output  logic  [$msb:$lsb]    $allportsHoH{$key}{'port'},\n";
-				push(@outlines, $templine);
-				print("Input: $templine\n") if $debug;
-			} elsif(($allportsHoH{$key}{'width'} == 1) and !($allportsHoH{$key}{'port'} =~ m/(clk|clock|CLK)/)) {
-				$templine = "$indent_spaces output  logic            $allportsHoH{$key}{'port'},\n";
+				$templine = "$indent_spaces output  $netType  [$msb:$lsb]    $allportsHoH{$key}{'port'},\n";
+				
 				push(@outlines, $templine);
 				print("Input: $templine\n") if $debug;
 			}
@@ -1401,7 +1483,7 @@ sub genTBTestBody {
 				push(@iolines, $templine);
 				print("InOut: $templine\n") if $debug;
 			} else {
-				$templine = "$indent_spaces inout   wire           $allportsHoH{$key}{'port'},\n";
+				$templine = "$indent_spaces inout   wire	$allportsHoH{$key}{'port'},\n";
 				push(@iolines, $templine);
 				print("InOut: $templine\n") if $debug;
 			}
@@ -1409,15 +1491,28 @@ sub genTBTestBody {
 	}
 
 	for my $key ( sort(keys %allportsHoH) ) {
+		$flag = $allportsHoH{$key}{'widthFormat'};		# added by SP
+		
 		if ($allportsHoH{$key}{'direction'} eq "output") {
-			if ($allportsHoH{$key}{'width'} > 1) {
+			$netType = $VERILOG_MODE ? "" : "logic";
+			
+			if ($flag == 1){
+				if ($allportsHoH{$key}{'width'} > 1) {
+					$msb = $allportsHoH{$key}{'width'};
+					$msb -= 1;
+					$templine = "$indent_spaces input   $netType  [$msb:$lsb]    $allportsHoH{$key}{'port'},\n";
+					push(@inlines, $templine);
+					print("Output: $templine\n") if $debug;
+				} else {
+					$templine = "$indent_spaces input   $netType 	$allportsHoH{$key}{'port'},\n";
+					push(@inlines, $templine);
+					print("Output: $templine\n") if $debug;
+				}
+			}
+			else{
 				$msb = $allportsHoH{$key}{'width'};
-				$msb -= 1;
-				$templine = "$indent_spaces input   logic  [$msb:$lsb]    $allportsHoH{$key}{'port'},\n";
-				push(@inlines, $templine);
-				print("Output: $templine\n") if $debug;
-			} else {
-				$templine = "$indent_spaces input   logic           $allportsHoH{$key}{'port'},\n";
+				$templine = "$indent_spaces input  $netType  [$msb:$lsb]    $allportsHoH{$key}{'port'},\n";
+						
 				push(@inlines, $templine);
 				print("Output: $templine\n") if $debug;
 			}
@@ -1743,7 +1838,7 @@ sub genUCFHeader {
 #
 #******************************************************************
 #
-# COMPANY Confidential Copyright � $yearR
+# none Confidential Copyright ï¿½ $yearR
 #
 #******************************************************************
 #
@@ -2012,7 +2107,7 @@ sub genSVLowModule {
 
 *******************************************************************************
 
- COMPANY Confidential Copyright � $yearR
+ none Confidential Copyright ï¿½ $yearR
 
 *******************************************************************************
 
@@ -2146,7 +2241,7 @@ sub genSVTopModule {
 
 *******************************************************************************
 
- COMPANY Confidential Copyright � $yearR
+ none Confidential Copyright ï¿½ $yearR
 
 *******************************************************************************
 
